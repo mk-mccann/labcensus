@@ -1,17 +1,46 @@
 [project]
 name = "labcensus"
 version = "0.0.1"
-description = "Coming soon"
+description = "A read-only scanner that reports what is actually on a research lab's storage."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Matthew McCann" }]
+keywords = [
+    "neuroscience",
+    "research-data",
+    "data-management",
+    "storage",
+    "audit",
+    "fair-data",
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: System :: Filesystems",
+]
+
 dependencies = [
     "fsspec>=2024.2.0",
     "typer>=0.12.0",
     "pydantic>=2.6.0",
     "jinja2>=3.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mk-mccann/labcensus"
+Repository = "https://github.com/mk-mccann/labcensus"
+Issues = "https://github.com/mk-mccann/labcensus/issues"
 
 [project.scripts]
 labcensus = "labcensus.cli:app"

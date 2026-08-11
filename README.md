@@ -4,7 +4,10 @@ A read-only scanner for scientists that tells you what is actually on your lab's
 
 **Read-only. Local-only.** labcensus never writes, moves, or converts a file, and never makes a network call. Everything it produces is a local JSON/HTML report on your machine.
 
-> Status: early development (pre-M0). Not yet published to PyPI.
+> **Status: name reserved, not yet functional.** `v0.0.1` is a placeholder
+> release. The scanner is in active development — the commands below describe
+> the intended v1 interface and **do not work yet**. Watch the repo for the
+> first working release.
 
 ## Installation
 
@@ -42,7 +45,7 @@ source .venv/bin/activate
 labcensus scan /path/to/lab/storage
 ```
 
-### From PyPI (once published)
+### From PyPI
 
 Zero-install, one-off usage via `uvx` — the promoted way to try labcensus on a NAS:
 
@@ -58,17 +61,15 @@ uv pip install labcensus
 pip install labcensus
 ```
 
-## Usage
+## Usage (planned)
+
+The intended v1 interface — not yet implemented:
 
 ```bash
 labcensus scan /path/to/lab/storage -o report.json
 ```
 
-(Full usage docs land alongside the M0 walking-skeleton milestone.)
-
-## Why read-only, why local
-
-This tool is meant to run on a PI's NAS the first time you ask, with nothing to configure and nothing sent anywhere. Trust is the product.
+Full usage docs land with the M0 walking-skeleton milestone.
 
 ## License
 
