@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build artifacts
+dist/
+build/
+
+# Environments
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Claude Code: settings.json is shared and committed; the .local variant is
+# per-machine (personal permission grants) and must not be.
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# project
+planning/
