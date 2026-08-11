@@ -1,6 +1,6 @@
 # labcensus
 
-A read-only scanner that tells a PI what is actually on their lab's storage — modalities, formats, volume, staleness, standards compliance, and orphaned data at risk of becoming unreadable — emitted as a single local HTML report.
+A read-only scanner for scientists that tells you what is actually on your lab's storage — modalities, formats, volume, staleness, standards compliance, and orphaned data at risk of becoming unreadable — emitted as a single local HTML report.
 
 **Read-only. Local-only.** labcensus never writes, moves, or converts a file, and never makes a network call. Everything it produces is a local JSON/HTML report on your machine.
 
