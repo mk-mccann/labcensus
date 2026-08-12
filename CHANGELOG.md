@@ -8,6 +8,15 @@ Notable changes to labcensus. The format follows
 
 ### Added
 
+- `labcensus scan PATH` is a working command. It prints what is on a tree:
+  totals, apparent versus on-disk size, breakdown by file type, largest
+  directories, age distribution, and anything unreadable. Progress goes to
+  stderr and the summary to stdout, so a scan can be piped.
+
+  `scan` is now genuinely a subcommand. Typer collapses a single-command
+  application into a bare invocation, so `labcensus scan PATH` — the form this
+  README and the PyPI page have always documented — did not previously exist.
+
 - `labcensus scan` now walks a tree and records it into a local SQLite index:
   one row per file and per directory, with size, allocated blocks, modification
   and access times, creation time where the platform provides one, owner and
