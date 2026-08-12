@@ -8,6 +8,7 @@ from labcensus.types import (
     FileStat,
     Owner,
     OwnerKind,
+    posix_group,
     posix_owner,
     windows_owner,
 )
@@ -23,8 +24,13 @@ def make_stat(path: str | PurePath, **overrides) -> FileStat:
     defaults = {
         "path": PurePosixPath(path) if isinstance(path, str) else path,
         "size": 1024,
+        "blocks": 8,
         "mtime": 1_700_000_000.0,
+        "btime": None,
+        "atime": 1_700_000_000.0,
         "owner": posix_owner(501),
+        "group": posix_group(20),
+        "mode": 0o100644,
         "ino": 1,
         "dev": 1,
         "nlink": 1,

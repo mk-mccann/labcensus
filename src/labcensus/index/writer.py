@@ -1,0 +1,255 @@
+"""Streaming writer for the scan index.
+
+Rows are accumulated into bounded batches and flushed with ``executemany``. The
+walk stays a streaming fold — it just folds into a file rather than only into
+aggregates — so nothing proportional to the tree is ever held in memory. Ten
+million ``FileStat`` objects would be roughly 5 GB resident; the same records
+are about 0.8 GB on disk and never all present at once.
+"""
+
+from __future__ import annotations
+
+import platform
+import socket
+import sqlite3
+import time
+from pathlib import Path, PurePath
+from typing import TYPE_CHECKING, TypeVar
+
+from .. import __version__
+from .schema import (
+    BUILD_PRAGMAS,
+    INDEX_SCHEMA_VERSION,
+    INDEXES,
+    QUERY_PRAGMAS,
+    TABLES,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from ..types import FileStat, Owner, WalkError
+
+#: Rows buffered before a flush. Large enough that per-statement overhead
+#: disappears, small enough that memory stays flat on a multi-million-file tree.
+BATCH_SIZE = 10_000
+
+# typing.Self landed in 3.11 and labcensus supports 3.10, so the TypeVar
+# stays until the floor moves. typing_extensions is not worth a dependency for
+# one annotation.
+_Self = TypeVar("_Self", bound="IndexWriter")
+
+
+class IndexTargetInsideTreeError(Exception):
+    """The index would be written inside the tree being scanned.
+
+    Refused rather than warned about. labcensus's entire claim is that it does
+    not write to the storage it is looking at, and an index dropped inside the
+    scanned tree breaks that in the most visible way available — it would appear
+    in its own report.
+    """
+
+
+def check_target_outside(db_path: Path, root: Path) -> None:
+    """Raise if ``db_path`` resolves to somewhere inside ``root``."""
+    db_resolved = db_path.expanduser().resolve()
+    root_resolved = root.expanduser().resolve()
+    if db_resolved == root_resolved or root_resolved in db_resolved.parents:
+        raise IndexTargetInsideTreeError(
+            f"refusing to write the index to {db_resolved}, which is inside the "
+            f"tree being scanned ({root_resolved}). Choose a path outside it."
+        )
+
+
+class IndexWriter:
+    """Builds one scan's index. Use as a context manager."""
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        batch_size: int = BATCH_SIZE,
+        hostname: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        self.db_path = Path(db_path)
+        self._batch_size = batch_size
+        # Injectable so golden tests can pin the two genuinely non-deterministic
+        # fields rather than filtering them out afterwards.
+        self._hostname = hostname if hostname is not None else socket.gethostname()
+        self._now = now
+        self._con: sqlite3.Connection | None = None
+        self._scan_id: int | None = None
+        self._files: list[tuple] = []
+        self._errors: list[tuple] = []
+        self._owners: dict[Owner, int] = {}
+        self._suffixes: dict[str, int] = {}
+        self._n_dirs = 0
+        self._n_files = 0
+        self._n_errors = 0
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def __enter__(self: _Self) -> _Self:  # noqa: PYI019
+        self._con = sqlite3.connect(self.db_path)
+        self._con.executescript(BUILD_PRAGMAS)
+        self._con.executescript(TABLES)
+        self._con.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+            ("index_schema_version", str(INDEX_SCHEMA_VERSION)),
+        )
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._con is None:
+            return
+        try:
+            if exc_type is None:
+                self.finish()
+        finally:
+            self._con.close()
+            self._con = None
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        if self._con is None:
+            raise RuntimeError("IndexWriter must be used as a context manager")
+        return self._con
+
+    def begin_scan(self, root: PurePath) -> int:
+        cur = self.connection.execute(
+            "INSERT INTO scans(root, started_at, tool_version, hostname, platform) "
+            "VALUES(?,?,?,?,?)",
+            (
+                str(root),
+                self._now if self._now is not None else time.time(),
+                __version__,
+                self._hostname,
+                platform.system(),
+            ),
+        )
+        self._scan_id = cur.lastrowid
+        return self._scan_id
+
+    def finish(self) -> None:
+        """Flush, record counts, build indexes, and restore query pragmas."""
+        self.flush()
+        con = self.connection
+        con.execute(
+            "UPDATE scans SET finished_at=?, n_dirs=?, n_files=?, n_errors=? WHERE id=?",
+            (
+                self._now if self._now is not None else time.time(),
+                self._n_dirs,
+                self._n_files,
+                self._n_errors,
+                self._scan_id,
+            ),
+        )
+        con.commit()
+        con.executescript(INDEXES)
+        con.commit()
+        con.executescript(QUERY_PRAGMAS)
+
+    # -- writing -----------------------------------------------------------
+
+    def add_dir(self, parent_id: int | None, name: str, depth: int) -> int:
+        """Record a directory and return the id its files should reference."""
+        cur = self.connection.execute(
+            "INSERT INTO dirs(scan_id, parent_id, name, depth) VALUES(?,?,?,?)",
+            (self._scan_id, parent_id, name, depth),
+        )
+        self._n_dirs += 1
+        return cur.lastrowid
+
+    def add_files(self, dir_id: int, files: Iterable[FileStat]) -> None:
+        for stat in files:
+            self._files.append(
+                (
+                    dir_id,
+                    stat.name,
+                    stat.name_raw,
+                    self._suffix_id(stat.suffix),
+                    stat.size,
+                    stat.blocks,
+                    stat.mtime,
+                    stat.btime,
+                    stat.atime,
+                    self._owner_id(stat.owner),
+                    self._owner_id(stat.group),
+                    stat.mode,
+                    stat.ino,
+                    stat.dev,
+                    stat.nlink,
+                    int(stat.islink),
+                    stat.link_target,
+                )
+            )
+            self._n_files += 1
+        if len(self._files) >= self._batch_size:
+            self.flush()
+
+    def add_errors(self, errors: Iterable[WalkError]) -> None:
+        for error in errors:
+            self._errors.append((self._scan_id, str(error.path), error.reason))
+            self._n_errors += 1
+        if len(self._errors) >= self._batch_size:
+            self.flush()
+
+    def flush(self) -> None:
+        con = self.connection
+        if self._files:
+            con.executemany(
+                "INSERT INTO files(dir_id, name, name_raw, suffix_id, size, blocks,"
+                " mtime, btime, atime, owner_id, group_id, mode, ino, dev, nlink,"
+                " islink, link_target)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                self._files,
+            )
+            self._files.clear()
+        if self._errors:
+            con.executemany(
+                "INSERT INTO errors(scan_id, path, reason) VALUES(?,?,?)",
+                self._errors,
+            )
+            self._errors.clear()
+        con.commit()
+
+    # -- interning ---------------------------------------------------------
+
+    def _owner_id(self, owner: Owner | None) -> int | None:
+        if owner is None:
+            return None
+        known = self._owners.get(owner)
+        if known is not None:
+            return known
+        cur = self.connection.execute(
+            "INSERT OR IGNORE INTO owners(kind, raw_id) VALUES(?,?)",
+            (owner.kind.value, owner.id),
+        )
+        if cur.lastrowid and cur.rowcount:
+            owner_id = cur.lastrowid
+        else:
+            owner_id = self.connection.execute(
+                "SELECT id FROM owners WHERE kind=? AND raw_id=?",
+                (owner.kind.value, owner.id),
+            ).fetchone()[0]
+        self._owners[owner] = owner_id
+        return owner_id
+
+    def _suffix_id(self, suffix: str) -> int | None:
+        if not suffix:
+            return None
+        known = self._suffixes.get(suffix)
+        if known is not None:
+            return known
+        cur = self.connection.execute(
+            "INSERT OR IGNORE INTO suffixes(value) VALUES(?)", (suffix,)
+        )
+        if cur.lastrowid and cur.rowcount:
+            suffix_id = cur.lastrowid
+        else:
+            suffix_id = self.connection.execute(
+                "SELECT id FROM suffixes WHERE value=?", (suffix,)
+            ).fetchone()[0]
+        self._suffixes[suffix] = suffix_id
+        return suffix_id

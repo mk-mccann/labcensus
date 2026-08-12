@@ -8,6 +8,20 @@ Notable changes to labcensus. The format follows
 
 ### Added
 
+- `labcensus scan` now walks a tree and records it into a local SQLite index:
+  one row per file and per directory, with size, allocated blocks, modification
+  and access times, creation time where the platform provides one, owner and
+  group, permissions, hardlink identity, and symlink targets. Unreadable paths
+  are recorded as findings rather than raised, so a scan completes on storage it
+  cannot fully read.
+
+  Separating the walk from everything downstream means the expensive part — the
+  `stat` calls, which dominate on network storage — is paid once. Detection,
+  rollups and reporting all read the index afterwards without touching the
+  storage again. The index stays on the machine that created it; nothing is
+  transmitted anywhere, and writing it inside the tree being scanned is refused
+  rather than warned about.
+
 - Modality detectors for Open-Ephys (binary and legacy), SpikeGLX, suite2p
   (current and legacy output generations), CaImAn and DeepLabCut. Detectors
   classify a directory from its listing alone and import no third-party

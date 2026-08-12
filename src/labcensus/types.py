@@ -44,6 +44,7 @@ from pathlib import PurePath
 
 class OwnerKind(str, Enum):
     POSIX = "posix"
+    POSIX_GROUP = "posix_group"
     WINDOWS = "windows"
 
 
@@ -70,6 +71,17 @@ def posix_owner(uid: int) -> Owner:
 
 
 @cache
+def posix_group(gid: int) -> Owner:
+    """A POSIX group, kept distinct from a uid of the same number.
+
+    Lab shares are usually group-owned, so a group that no longer resolves is
+    orphan evidence a uid alone misses. The separate kind exists so that uid 501
+    and gid 501 do not intern to the same principal.
+    """
+    return Owner(OwnerKind.POSIX_GROUP, str(gid))
+
+
+@cache
 def windows_owner(sid: str) -> Owner:
     return Owner(OwnerKind.WINDOWS, sid)
 
@@ -89,17 +101,49 @@ class FileStat:
 
     Symlinks are recorded but never followed. A backend maps whatever its
     platform calls a link — including Windows junctions and reparse points —
-    onto ``islink``.
+    onto ``islink``. ``link_target`` is the unresolved target string: a
+    git-annex or DataLad tree whose content is not present locally is a field of
+    symlinks into ``.git/annex/objects``, and without the target it looks like a
+    large dataset occupying no space at all.
+
+    Every field here comes from the single ``stat`` the walk already pays for,
+    so none of it costs extra I/O.
+
+    ``size`` is apparent size; ``blocks`` is what the filesystem actually
+    allocated. They diverge under sparse files, compression and deduplication,
+    and the headline volume disagreeing with the storage administrator's quota
+    figure is a credibility problem before it is a technical one.
+
+    ``btime`` is true creation time where the platform has it — macOS always,
+    Windows since Python 3.12, generally absent on Linux. It is ``None``
+    elsewhere rather than falling back to ``st_ctime``, which on POSIX is the
+    inode's last metadata change and is not a creation date however often it is
+    used as one.
+
+    ``name_raw`` holds the original bytes when a filename was not valid UTF-8.
+    ``path`` always carries a decodable name so that nothing downstream has to
+    defend against surrogates, and the raw form is kept here so nothing is lost.
+
+    ``atime`` is unreliable by design — ``relatime`` updates it at most daily,
+    ``noatime`` never — but where it survives, an access time older than the
+    mtime by years is the orphan question answered directly.
     """
 
     path: PurePath
     size: int
+    blocks: int | None
     mtime: float
+    btime: float | None
+    atime: float | None
     owner: Owner | None
+    group: Owner | None
+    mode: int | None
     ino: int | None
     dev: int | None
     nlink: int | None
     islink: bool
+    link_target: str | None = None
+    name_raw: bytes | None = None
 
     @property
     def name(self) -> str:

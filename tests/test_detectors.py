@@ -32,8 +32,13 @@ def listing(path, filenames=(), subdirs=()):
         FileStat(
             path=base / name,
             size=1024,
+            blocks=8,
             mtime=1_700_000_000.0,
+            btime=None,
+            atime=1_700_000_000.0,
             owner=posix_owner(501),
+            group=None,
+            mode=0o100644,
             ino=None,
             dev=None,
             nlink=None,
