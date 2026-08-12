@@ -3,7 +3,7 @@ name = "labcensus"
 version = "0.0.1"
 description = "A read-only scanner that reports what is actually on a research lab's storage."
 readme = "README.md"
-license = "MIT"
+license = "BSD-3-Clause"
 requires-python = ">=3.10"
 authors = [{ name = "Matthew McCann" }]
 keywords = [
@@ -62,6 +62,7 @@ include = [
     "tests",
     "docs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
 ]

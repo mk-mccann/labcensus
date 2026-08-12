@@ -73,4 +73,6 @@ Full usage docs land with the M0 walking-skeleton milestone.
 
 ## License
 
-MIT
+BSD 3-Clause. Free to use, modify, and distribute, commercially or otherwise;
+the one added condition is that the copyright holder's name may not be used to
+endorse or promote derived products without written permission.
