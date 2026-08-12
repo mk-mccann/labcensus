@@ -6,7 +6,7 @@ app = typer.Typer(help="labcensus — read-only census of a lab's storage.")
 @app.command()
 def scan(path: str) -> None:
     """Walk PATH and emit a census report. (M0 — not yet implemented.)"""
-    raise NotImplementedError
+    print(f"NOT IMPLEMENTED. Future behavior will show: Scanning {path} ...")
 
 
 if __name__ == "__main__":
