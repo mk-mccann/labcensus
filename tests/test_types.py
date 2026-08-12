@@ -1,4 +1,5 @@
 import dataclasses
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -12,9 +13,15 @@ from labcensus.types import (
 )
 
 
-def make_stat(path: str, **overrides) -> FileStat:
+def make_stat(path: str | PurePath, **overrides) -> FileStat:
+    """A FileStat for `path`.
+
+    A plain string is taken as POSIX, which is what most of these tests use.
+    Cases that care about Windows pass a `PureWindowsPath`, exactly as a
+    Windows backend would.
+    """
     defaults = {
-        "path": path,
+        "path": PurePosixPath(path) if isinstance(path, str) else path,
         "size": 1024,
         "mtime": 1_700_000_000.0,
         "owner": posix_owner(501),
@@ -76,6 +83,71 @@ class TestFileStat:
         assert make_stat("/data/a.tif", owner=None).owner is None
 
 
+class TestPathFlavour:
+    """The backend pins the flavour; every platform then parses correctly.
+
+    Each case here returned nonsense when `name`/`suffix` were derived by
+    splitting the path with `posixpath`, and returned it *silently* — which on
+    a Windows rig means a scan that finds nothing and reports no error.
+    """
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            (PureWindowsPath(r"C:\lab\rec\settings.xml"), "settings.xml"),
+            (PureWindowsPath(r"\\server\share\rec\continuous.dat"), "continuous.dat"),
+            (PureWindowsPath(r"C:\lab\data.v2\README"), "README"),
+            (PureWindowsPath(r"D:\Miniscope\0.avi"), "0.avi"),
+            (PureWindowsPath("C:/lab/forward/slashes.tif"), "slashes.tif"),
+            (PurePosixPath("/mnt/nas/rec/settings.xml"), "settings.xml"),
+        ],
+    )
+    def test_name(self, path, expected):
+        assert make_stat(path).name == expected
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            (PureWindowsPath(r"C:\lab\rec\settings.xml"), ".xml"),
+            (PureWindowsPath(r"C:\lab\data.v2\README"), ""),
+            (PureWindowsPath(r"C:\lab\scan_00001.TIF"), ".tif"),
+            (PureWindowsPath(r"\\server\share\run_g0_t0.imec0.ap.bin"), ".bin"),
+        ],
+    )
+    def test_suffix(self, path, expected):
+        assert make_stat(path).suffix == expected
+
+    def test_posix_name_may_contain_a_backslash(self):
+        # Legal on POSIX, and the reason a Windows flavour is not a universal
+        # answer either: it would report this file as "name.tif".
+        stat = make_stat(PurePosixPath(r"/data/weird\name.tif"))
+        assert stat.name == r"weird\name.tif"
+        assert stat.suffix == ".tif"
+
+    def test_str_round_trips_to_the_native_form(self):
+        # The report shows a PI a path they can paste into their own file
+        # browser, so serialization must not normalise separators.
+        win = r"C:\lab\rec\settings.xml"
+        assert str(make_stat(PureWindowsPath(win)).path) == win
+
+    def test_stem_pairing_survives(self):
+        # SpikeGLX is a same-stem .bin/.meta pairing — the detector needs this.
+        bin_ = make_stat(PureWindowsPath(r"C:\lab\run_g0_t0.imec0.ap.bin"))
+        assert bin_.path.with_suffix(".meta").name == "run_g0_t0.imec0.ap.meta"
+
+    def test_windows_detector_probe_hits(self):
+        # The regression this class exists for: `settings.xml` is exactly the
+        # probe that identifies an Open-Ephys recording.
+        listing = DirListing.build(
+            PureWindowsPath(r"C:\lab\rec"),
+            (make_stat(PureWindowsPath(r"C:\lab\rec\settings.xml")),),
+            {"continuous"},
+        )
+        assert listing.has_file("settings.xml")
+        assert listing.has_subdir("continuous")
+        assert listing.name == "rec"
+
+
 class TestHardlinkKey:
     def test_single_link_is_not_deduplicable(self):
         assert make_stat("/data/a.tif", nlink=1).hardlink_key is None
@@ -100,33 +172,41 @@ class TestHardlinkKey:
 class TestDirListing:
     def test_build_derives_membership_sets(self):
         files = (make_stat("/rec/settings.xml"), make_stat("/rec/notes.txt"))
-        listing = DirListing.build("/rec", files, {"continuous", "events"})
+        listing = DirListing.build(
+            PurePosixPath("/rec"), files, {"continuous", "events"}
+        )
 
         assert listing.filenames == {"settings.xml", "notes.txt"}
         assert listing.subdirs == {"continuous", "events"}
         assert listing.name == "rec"
 
     def test_build_accepts_empty_directory(self):
-        listing = DirListing.build("/empty", (), set())
+        listing = DirListing.build(PurePosixPath("/empty"), (), set())
         assert listing.files == ()
         assert listing.filenames == frozenset()
 
     @pytest.mark.parametrize("probe", ["settings.xml", "Settings.xml", "SETTINGS.XML"])
     def test_has_file_is_case_insensitive(self, probe):
-        listing = DirListing.build("/rec", (make_stat("/rec/Settings.XML"),), set())
+        listing = DirListing.build(
+            PurePosixPath("/rec"), (make_stat("/rec/Settings.XML"),), set()
+        )
         assert listing.has_file(probe)
 
     @pytest.mark.parametrize("probe", ["continuous", "Continuous", "CONTINUOUS"])
     def test_has_subdir_is_case_insensitive(self, probe):
-        listing = DirListing.build("/rec", (), {"Continuous"})
+        listing = DirListing.build(PurePosixPath("/rec"), (), {"Continuous"})
         assert listing.has_subdir(probe)
 
     def test_original_casing_is_preserved_for_display(self):
-        listing = DirListing.build("/rec", (make_stat("/rec/Settings.XML"),), {"Cont"})
+        listing = DirListing.build(
+            PurePosixPath("/rec"), (make_stat("/rec/Settings.XML"),), {"Cont"}
+        )
         assert listing.filenames == {"Settings.XML"}
         assert listing.subdirs == {"Cont"}
 
     def test_absent_names_report_absent(self):
-        listing = DirListing.build("/rec", (make_stat("/rec/a.tif"),), {"plane0"})
+        listing = DirListing.build(
+            PurePosixPath("/rec"), (make_stat("/rec/a.tif"),), {"plane0"}
+        )
         assert not listing.has_file("settings.xml")
         assert not listing.has_subdir("continuous")

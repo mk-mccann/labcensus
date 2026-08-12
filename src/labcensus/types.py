@@ -8,14 +8,38 @@ Fields a backend may be unable to supply are typed ``| None`` rather than
 defaulted to a sentinel. POSIX and Windows expose genuinely different metadata,
 and a heuristic that silently treats "unknown" as a real value is how the
 orphan score produces confident nonsense.
+
+Paths
+-----
+
+``path`` is a :class:`pathlib.PurePath`, and **the backend chooses its flavour**:
+``PureWindowsPath`` on Windows, ``PurePosixPath`` on POSIX. Nothing else in the
+system decides, because nothing else knows.
+
+That distinction is the whole point. String splitting cannot be written
+portably — ``posixpath`` does not split on ``\\``, ``ntpath`` mangles POSIX
+filenames that legally contain one — and ``pathlib.Path`` is no better, since a
+concrete ``Path`` binds to whichever platform is *running* rather than whichever
+platform produced the path. Pinning the flavour at the point of origin is what
+makes every case correct at once: ``C:\\lab\\rec\\settings.xml`` and
+``\\\\server\\share\\rec`` parse as Windows, while a POSIX file genuinely named
+``weird\\name.tif`` keeps its backslash.
+
+Constructing a ``PurePath`` per file is not free — roughly 4 s per million files
+— but a scan of that size runs for minutes against a NAS, and the cost buys
+correctness on the target platform plus ``.name``, ``.suffix``, ``.parent``,
+``.parts`` and ``.with_suffix()`` for detectors, which need all of them:
+SpikeGLX is a same-stem ``.bin``/``.meta`` pairing, and ALF is a path-shape
+match. ``str(path)`` returns the native form, so the report still shows a PI a
+path they can paste into their own file browser.
 """
 
 from __future__ import annotations
 
-import posixpath
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
+from pathlib import PurePath
 
 
 class OwnerKind(str, Enum):
@@ -68,7 +92,7 @@ class FileStat:
     onto ``islink``.
     """
 
-    path: str
+    path: PurePath
     size: int
     mtime: float
     owner: Owner | None
@@ -79,7 +103,7 @@ class FileStat:
 
     @property
     def name(self) -> str:
-        return posixpath.basename(self.path)
+        return self.path.name
 
     @property
     def suffix(self) -> str:
@@ -88,7 +112,7 @@ class FileStat:
         Lowercased because ``.TIF`` and ``.tif`` are one format, and mixed case
         is common in microscopy exports.
         """
-        return posixpath.splitext(self.path)[1].lower()
+        return self.path.suffix.lower()
 
     @property
     def hardlink_key(self) -> tuple[int, int] | None:
@@ -116,7 +140,7 @@ class DirListing:
     since every registered detector interrogates the same listing.
     """
 
-    path: str
+    path: PurePath
     files: tuple[FileStat, ...]
     subdirs: frozenset[str]
     filenames: frozenset[str]
@@ -126,12 +150,14 @@ class DirListing:
     @classmethod
     def build(
         cls,
-        path: str,
+        path: PurePath,
         files: tuple[FileStat, ...],
         subdirs: frozenset[str] | set[str],
     ) -> DirListing:
+
         filenames = frozenset(f.name for f in files)
         subdirs = frozenset(subdirs)
+
         return cls(
             path=path,
             files=files,
@@ -143,7 +169,7 @@ class DirListing:
 
     @property
     def name(self) -> str:
-        return posixpath.basename(self.path)
+        return self.path.name
 
     def has_file(self, name: str) -> bool:
         """Case-insensitive membership test, which is what detectors want.
@@ -152,6 +178,7 @@ class DirListing:
         so a rig that writes ``Settings.xml`` and one that writes
         ``settings.xml`` are the same finding.
         """
+
         return name.casefold() in self._filenames_folded
 
     def has_subdir(self, name: str) -> bool:
@@ -167,5 +194,5 @@ class WalkError:
     reported, never raised.
     """
 
-    path: str
+    path: PurePath
     reason: str
