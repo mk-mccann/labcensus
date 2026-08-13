@@ -1,11 +1,4 @@
-"""Streaming writer for the scan index.
-
-Rows are accumulated into bounded batches and flushed with ``executemany``. The
-walk stays a streaming fold — it just folds into a file rather than only into
-aggregates — so nothing proportional to the tree is ever held in memory. Ten
-million ``FileStat`` objects would be roughly 5 GB resident; the same records
-are about 0.8 GB on disk and never all present at once.
-"""
+"""Streaming writer for the scan index."""
 
 from __future__ import annotations
 
@@ -30,24 +23,19 @@ if TYPE_CHECKING:
 
     from ..types import FileStat, Owner, WalkError
 
-#: Rows buffered before a flush. Large enough that per-statement overhead
-#: disappears, small enough that memory stays flat on a multi-million-file tree.
+#: Rows buffered before a flush.
 BATCH_SIZE = 10_000
 
-# typing.Self landed in 3.11 and labcensus supports 3.10, so the TypeVar
-# stays until the floor moves. typing_extensions is not worth a dependency for
-# one annotation.
+# typing.Self is 3.11+; labcensus supports 3.10.
 _Self = TypeVar("_Self", bound="IndexWriter")
 
 
 class IndexTargetInsideTreeError(Exception):
-    """The index would be written inside the tree being scanned.
+    """The index would be written inside the tree being scanned."""
 
-    Refused rather than warned about. labcensus's entire claim is that it does
-    not write to the storage it is looking at, and an index dropped inside the
-    scanned tree breaks that in the most visible way available — it would appear
-    in its own report.
-    """
+
+class ScanAlreadyRecordedError(Exception):
+    """This index already holds a scan. One index file, one scan."""
 
 
 def check_target_outside(db_path: Path, root: Path) -> None:
@@ -62,7 +50,12 @@ def check_target_outside(db_path: Path, root: Path) -> None:
 
 
 class IndexWriter:
-    """Builds one scan's index. Use as a context manager."""
+    """Builds one scan's index. Use as a context manager.
+
+    An index holds exactly one scan. If the block exits with an exception the
+    database is removed, so an interrupted run leaves nothing behind to trip
+    over on the next attempt.
+    """
 
     def __init__(
         self,
@@ -74,8 +67,7 @@ class IndexWriter:
     ) -> None:
         self.db_path = Path(db_path)
         self._batch_size = batch_size
-        # Injectable so golden tests can pin the two genuinely non-deterministic
-        # fields rather than filtering them out afterwards.
+        # Injectable so tests can pin the non-deterministic fields.
         self._hostname = hostname if hostname is not None else socket.gethostname()
         self._now = now
         self._con: sqlite3.Connection | None = None
@@ -84,6 +76,7 @@ class IndexWriter:
         self._errors: list[tuple] = []
         self._owners: dict[Owner, int] = {}
         self._suffixes: dict[str, int] = {}
+        self._preexisting = False
         self._n_dirs = 0
         self._n_files = 0
         self._n_errors = 0
@@ -91,6 +84,7 @@ class IndexWriter:
     # -- lifecycle ---------------------------------------------------------
 
     def __enter__(self: _Self) -> _Self:  # noqa: PYI019
+        self._preexisting = self.db_path.exists()
         self._con = sqlite3.connect(self.db_path)
         self._con.executescript(BUILD_PRAGMAS)
         self._con.executescript(TABLES)
@@ -109,6 +103,8 @@ class IndexWriter:
         finally:
             self._con.close()
             self._con = None
+            if exc_type is not None and not self._preexisting:
+                self.db_path.unlink(missing_ok=True)
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -117,6 +113,15 @@ class IndexWriter:
         return self._con
 
     def begin_scan(self, root: PurePath) -> int:
+        """Open a scan and return its id.
+
+        Raises :class:`ScanAlreadyRecordedError` if this index already holds
+        one; the rollups assume a single scan per file.
+        """
+        if self.connection.execute("SELECT 1 FROM scans LIMIT 1").fetchone():
+            raise ScanAlreadyRecordedError(
+                f"{self.db_path} already holds a scan; use a new index file"
+            )
         cur = self.connection.execute(
             "INSERT INTO scans(root, started_at, tool_version, hostname, platform) "
             "VALUES(?,?,?,?,?)",
@@ -132,7 +137,7 @@ class IndexWriter:
         return self._scan_id
 
     def finish(self) -> None:
-        """Flush, record counts, build indexes, and restore query pragmas."""
+        """Flush, record counts, build indexes, and mark the scan finished."""
         self.flush()
         con = self.connection
         con.execute(
@@ -153,7 +158,7 @@ class IndexWriter:
     # -- writing -----------------------------------------------------------
 
     def add_dir(self, parent_id: int | None, name: str, depth: int) -> int:
-        """Record a directory and return the id its files should reference."""
+        """Record a directory and return the id its files reference."""
         cur = self.connection.execute(
             "INSERT INTO dirs(scan_id, parent_id, name, depth) VALUES(?,?,?,?)",
             (self._scan_id, parent_id, name, depth),

@@ -179,8 +179,8 @@ class TestSymlinks:
         ).fetchone()
         assert islink == 1
         assert target.endswith("SHA256E-s0--deadbeef")
-        # Recorded, not followed, and not an error.
-        assert size == 0 or size is not None
+        # The link's own size, not the absent target's, and not an error.
+        assert size == len(".git/annex/objects/SHA256E-s0--deadbeef")
         assert errors == 0
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlink semantics")

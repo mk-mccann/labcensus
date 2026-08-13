@@ -1,13 +1,10 @@
-"""Traversal: walk a tree once, write every path into the index.
+"""Walk a tree once, writing every path into the index.
 
-Breadth-first over an explicit queue rather than recursion, because lab trees
-nest deeply enough — per-session, per-probe, per-plane directories — to make
-recursion depth a real question, and because an explicit queue is what
-resumability will need when it arrives.
+Depth-first over an explicit stack rather than recursion, so deeply nested
+trees cannot exhaust the interpreter's stack.
 
-Symlinks are recorded and never followed. Following them means loops and
-double-counting, and a tree full of links into somebody else's share is itself
-a census finding rather than something to chase.
+Symlinks are recorded but never followed, which avoids loops and
+double-counting.
 """
 
 from __future__ import annotations
@@ -22,12 +19,7 @@ if TYPE_CHECKING:
 
 
 class ProgressReporter(Protocol):
-    """Called as the walk proceeds.
-
-    A scan of ten million files over SMB runs for around an hour. An hour of
-    silence reads as a hang, so progress is a requirement rather than a
-    courtesy — it just does not belong in this module.
-    """
+    """Called periodically as the walk proceeds."""
 
     def __call__(self, *, dirs: int, files: int, errors: int, path: str) -> None: ...
 
@@ -42,10 +34,8 @@ def walk(
 ) -> tuple[int, int, int]:
     """Walk ``root``, writing every directory and file into ``writer``.
 
-    Returns ``(dirs, files, errors)``. Nothing is raised for an unreadable
-    path: a NAS produces permission errors within seconds, and a scan that stops
-    at the first one is useless on the only hardware that matters. They are
-    recorded and the walk continues.
+    Returns ``(dirs, files, errors)``. Unreadable paths are recorded and the
+    walk continues rather than stopping.
     """
     backend = backend or LocalBackend()
     root_path = Path(root)
@@ -55,11 +45,11 @@ def walk(
 
     n_dirs = n_files = n_errors = 0
 
-    # (filesystem path, parent row id, depth). Explicit queue, not recursion.
-    queue: list[tuple[Path, int | None, int]] = [(root_path, None, 0)]
+    # (filesystem path, parent row id, depth)
+    stack: list[tuple[Path, int | None, int]] = [(root_path, None, 0)]
 
-    while queue:
-        current, parent_id, depth = queue.pop()
+    while stack:
+        current, parent_id, depth = stack.pop()
         listing, errors = backend.list_dir(current)
 
         if errors:
@@ -67,8 +57,7 @@ def walk(
             n_errors += len(errors)
 
         if listing is None:
-            # The directory itself could not be read. Already recorded as an
-            # error; there is nothing beneath it to enqueue.
+            # Recorded as an error above; nothing beneath it to visit.
             continue
 
         name = listing.path.name or str(listing.path)
@@ -78,10 +67,9 @@ def walk(
         writer.add_files(dir_id, listing.files)
         n_files += len(listing.files)
 
-        # Reversed so that popping from the end yields sorted order, keeping the
-        # walk deterministic across runs and filesystems.
+        # Reversed so that popping yields sorted order.
         for child in reversed(list(backend.subdir_paths(listing))):
-            queue.append((Path(str(child)), dir_id, depth + 1))
+            stack.append((Path(str(child)), dir_id, depth + 1))
 
         if progress and n_dirs % progress_every == 0:
             progress(

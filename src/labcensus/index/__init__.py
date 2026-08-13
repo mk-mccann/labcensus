@@ -1,14 +1,8 @@
 """The scan index: a local SQLite file holding one row per path.
 
-Separating the walk from everything downstream is what makes the tool usable on
-a real lab NAS. The walk is bound by ``stat`` calls — on the order of an hour
-for ten million files over SMB — and it should be paid exactly once. Detection,
-rollups and reporting all read the index afterwards, as often as needed, without
-touching the storage again.
-
-The index never leaves the machine that created it. Nothing is transmitted
-anywhere, which keeps a scan at any institution a matter of that institution's
-own internal processing.
+The walk is paid once and written here; detection, rollups and reporting read
+the index afterwards without touching the storage again. The index stays on the
+machine that created it.
 """
 
 from __future__ import annotations

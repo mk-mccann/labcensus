@@ -1,23 +1,8 @@
-"""The local filesystem, via ``os.scandir``.
-
-Deliberately not fsspec. Its ``LocalFileSystem.info()`` copies ``uid``, ``ino``
-and ``nlink`` off ``os.stat_result`` with no guard, so on Windows — where
-``st_uid`` is always ``0`` — it returns a confident ``uid: 0`` for every file on
-the volume. That is exactly the uniform lie the :class:`~labcensus.types.Owner`
-model exists to prevent. Its ``created`` field silently becomes ``st_ctime`` on
-Linux, and ``make_path_posix`` imposes a path normalisation we have not chosen.
-fsspec returns when there is an S3 or SSH backend to write, where it earns its
-keep.
-
-``os.scandir`` also hands back a ``DirEntry`` whose ``stat()`` is already cached
-from the directory read on Unix, so the metadata below costs no extra system
-call.
-"""
+"""The local filesystem, via ``os.scandir``."""
 
 from __future__ import annotations
 
 import os
-import stat as stat_module
 import sys
 from pathlib import PurePath, PureWindowsPath
 from typing import TYPE_CHECKING
@@ -25,6 +10,7 @@ from typing import TYPE_CHECKING
 from ..types import (
     DirListing,
     FileStat,
+    Owner,
     WalkError,
     posix_group,
     posix_owner,
@@ -36,21 +22,17 @@ if TYPE_CHECKING:
 
 IS_WINDOWS = sys.platform == "win32"
 
-#: Windows charges a system call for ``DirEntry.inode()`` that Unix does not,
-#: which over an SMB mount is a network round trip per file. The field buys only
-#: hardlink deduplication, which is near-pointless on NTFS. Decline to pay.
+#: Inode lookups cost a system call on Windows that Unix does not charge, and
+#: buy only hardlink deduplication. Not worth it there.
 PAY_FOR_INODE = not IS_WINDOWS
 
 
 def _decode(name: str) -> tuple[str, bool, bytes | None]:
     """Return a storable name, whether it was lossy, and the raw bytes if so.
 
-    POSIX filenames are bytes, not text. ``os.scandir`` surfaces undecodable
-    ones with surrogate escapes, which SQLite's TEXT type cannot store and
-    ``json`` cannot encode. Rather than fail a multi-hour walk on one badly
-    named file, replace the undecodable bytes and keep the original alongside,
-    so nothing is lost and the report can say plainly that a name was not valid
-    text.
+    POSIX filenames are bytes and need not be valid text. Undecodable bytes are
+    replaced so the name can be stored and displayed, and the original is kept
+    alongside so nothing is lost.
     """
     try:
         name.encode("utf-8")
@@ -67,12 +49,7 @@ class LocalBackend:
         self._pay_for_inode = pay_for_inode
 
     def to_pure(self, path: str | os.PathLike[str]) -> PurePath:
-        """A path in this platform's flavour.
-
-        The flavour is pinned here, at the point of origin, because this is the
-        only layer that knows it. A concrete ``Path`` would bind to whichever
-        platform is *running*, which is the same bug in nicer packaging.
-        """
+        """A path in this platform's flavour."""
         return PureWindowsPath(path) if IS_WINDOWS else PurePath(path)
 
     def list_dir(
@@ -80,9 +57,8 @@ class LocalBackend:
     ) -> tuple[DirListing | None, list[WalkError]]:
         """One directory's immediate contents, plus anything unreadable in it.
 
-        Errors are returned, never raised. A tree nobody can read is a census
-        finding — arguably the most useful one — and a NAS produces permission
-        errors within seconds of starting.
+        Errors are returned rather than raised, so a scan completes on storage
+        it cannot fully read.
         """
         base = self.to_pure(path)
         errors: list[WalkError] = []
@@ -107,20 +83,12 @@ class LocalBackend:
         return DirListing.build(base, tuple(files), subdirs), errors
 
     def subdir_paths(self, listing: DirListing) -> Iterator[PurePath]:
-        """Child directories of a listing, in a stable order.
-
-        Sorted so that a scan of the same tree twice produces the same index.
-        Filesystem order is arbitrary and would otherwise leak into the output.
-        """
+        """Child directories of a listing, sorted for a repeatable scan."""
         for name in sorted(listing.subdirs):
             yield listing.path / name
 
     def peek(self, path: str | os.PathLike[str], nbytes: int) -> bytes:
-        """The first ``nbytes`` of a file.
-
-        The only method here that opens anything, which is what gives the
-        sampling policy exactly one thing to gate. No detector calls it yet.
-        """
+        """The first ``nbytes`` of a file. The only call here that opens one."""
         with open(path, "rb") as handle:
             return handle.read(nbytes)
 
@@ -156,7 +124,7 @@ class LocalBackend:
             name_raw=raw,
         )
 
-    def _owner(self, st: os.stat_result) -> object | None:
+    def _owner(self, st: os.stat_result) -> Owner | None:
         if not IS_WINDOWS:
             return posix_owner(st.st_uid)
         sid = _windows_sid(st)
@@ -164,22 +132,16 @@ class LocalBackend:
 
 
 def _windows_sid(st: os.stat_result) -> str | None:
-    """Placeholder for SID resolution.
+    """The owning SID, or ``None`` until SID resolution is implemented.
 
-    ``st_uid`` is always ``0`` on Windows, so returning it would feed the orphan
-    heuristic a uniform, confident lie across an entire platform. Until this
-    reads the real SID via ``win32security.GetFileSecurity``, it reports that
-    ownership is unavailable, which the heuristic already knows how to handle.
+    ``st_uid`` is always ``0`` on Windows, so reporting ownership as unavailable
+    is the only honest answer available here.
     """
     return None
 
 
 def _reason(exc: BaseException) -> str:
-    """A short, stable description of why a path could not be read."""
+    """Why a path could not be read."""
     if isinstance(exc, OSError) and exc.strerror:
         return exc.strerror
     return type(exc).__name__
-
-
-def _is_dir_mode(mode: int) -> bool:
-    return stat_module.S_ISDIR(mode)

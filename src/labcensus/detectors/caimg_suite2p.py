@@ -1,35 +1,15 @@
-"""suite2p segmentation output, as two detectors — one per output generation.
+"""suite2p segmentation output, as one detector per output generation.
 
-Signatures from the suite2p documentation
-(https://suite2p.readthedocs.io/en/latest/outputs/) and ``suite2p/run_s2p.py``
-(MouseLand/suite2p, GPL-3.0 — the file names are reproduced as facts about the
-output format, not as copied code).
+Both generations write the same five core arrays and differ in what sits beside
+them: current suite2p writes ``reg_outputs.npy`` and ``detect_outputs.npy``,
+while older output writes ``ops.npy``.
 
-Both generations write the same five core arrays. They differ in what sits
-beside them:
+They are split so each can follow suite2p's own changes without disturbing the
+other, and they are mutually exclusive: the legacy detector requires the absence
+of every current marker.
 
-===============  ==================================================
-Current          ``reg_outputs.npy`` + ``detect_outputs.npy``, both
-                 documented as always saved
-Legacy           ``ops.npy``, which the current documentation no
-                 longer lists
-===============  ==================================================
-
-Split into two detectors rather than one with a variant, because the two file
-sets are disjoint and each will drift on its own schedule — suite2p has already
-changed this once. A third generation becomes a third detector, and neither
-existing one has to be touched or re-tested. The cost is a little duplication
-and one extra pass per directory, which is nothing next to the ``scandir`` the
-walker has already paid for.
-
-The generations are mutually exclusive by construction: the legacy detector
-requires the *absence* of every current marker, so a directory can never satisfy
-both. Same shape as the Open-Ephys pair, where legacy is defined by the absence
-of ``structure.oebin``.
-
-``settings.npy`` and ``db.npy`` are written by current ``run_s2p.py`` but are
-absent from the documented output list, so they corroborate the current
-generation without being required by it.
+Signatures from https://suite2p.readthedocs.io/en/latest/outputs/ and
+``suite2p/run_s2p.py`` (MouseLand/suite2p).
 """
 
 from __future__ import annotations
@@ -58,7 +38,7 @@ def _has_core(listing: DirListing) -> bool:
 
 
 def _context(listing: DirListing) -> list[str]:
-    """Evidence common to both generations: extras, exports, and location."""
+    """Evidence common to both generations: extras, exports and location."""
     evidence = [n for n in CONDITIONAL_ARRAYS if listing.has_file(n)]
     evidence.extend(n for n in EXPORTS if listing.has_file(n))
     if PLANE_DIR.match(listing.name):
@@ -97,11 +77,9 @@ class Suite2pDetector:
 class Suite2pLegacyDetector:
     """suite2p output predating the ``reg_outputs``/``detect_outputs`` split.
 
-    Also catches output that carries no generation marker at all — a partial
-    copy, or a tree someone pruned. That still has the five core arrays, which
-    together are unmistakable, so it is reported at reduced confidence with the
-    reason stated rather than dropped. Old and half-copied output is exactly
-    what a census exists to surface.
+    Also catches output carrying no generation marker at all — a pruned or
+    partially copied tree — at reduced confidence, since the five core arrays
+    together are still unmistakable.
     """
 
     name = "suite2p-legacy"

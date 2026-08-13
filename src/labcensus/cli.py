@@ -28,13 +28,7 @@ app = typer.Typer(
 
 @app.callback()
 def main() -> None:
-    """labcensus — read-only census of a lab's storage.
-
-    This callback exists so that ``scan`` stays a subcommand. Typer collapses a
-    single-command application into a bare invocation, which silently made
-    ``labcensus scan PATH`` — the form the README and the PyPI page document —
-    not exist.
-    """
+    """labcensus — read-only census of a lab's storage."""
 
 
 scan_output = typer.Option(
