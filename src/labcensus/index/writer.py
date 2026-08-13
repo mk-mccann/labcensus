@@ -205,7 +205,7 @@ class IndexWriter:
             (self._scan_id, parent_id, name, depth),
         )
         self._n_dirs += 1
-        return cur.lastrowid #type: ignore
+        return cur.lastrowid  # type: ignore
 
     def add_files(self, dir_id: int, files: Iterable[FileStat]) -> None:
         """
