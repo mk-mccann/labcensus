@@ -16,9 +16,7 @@ usually the least reproducible thing in the tree.
 
 and written as ``<video><scorer>.h5`` (plus ``filtered`` variants and a matching
 ``.csv``). Projects created before DLC 2.1 used ``DeepCut`` in place of ``DLC``,
-so both are accepted — the same version-drift lesson as suite2p, and worth
-recording as evidence because a ``DeepCut``-era tree is old enough to be a
-staleness finding in its own right.
+so both are accepted.
 
 Neither shape is detectable from extensions: DeepLabCut declares ``.h5`` and
 ``.csv``, which are among the least diagnostic suffixes in the ecosystem.
