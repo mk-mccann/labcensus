@@ -78,8 +78,18 @@ def summarise(
 ) -> Summary:
     """Summarise the scan in ``con``.
 
-    Raises :class:`IncompleteIndexError` if the index holds no finished scan,
-    which is what an interrupted run leaves behind.
+    Args:
+        con (sqlite3.Connection): Connection to the index database.
+        top_n (int): Number of rows to show in each top-N table.
+        now (float | None): Current time in seconds since the epoch, or None
+            to use the real clock.
+
+    Returns:
+        Summary: The summary of the scan.
+
+    Raises:
+        IncompleteIndexError: If the index holds no finished scan, which is
+            what an interrupted run leaves behind.
     """
     now = time.time() if now is None else now
     scan = con.execute(
@@ -125,7 +135,15 @@ def summarise(
 
 
 def _top_suffixes(con: sqlite3.Connection, top_n: int) -> tuple[SuffixRow, ...]:
-    """The largest file types by total size."""
+    """The largest file types by total size.
+
+    Args:
+        con (sqlite3.Connection): Connection to the index database.
+        top_n (int): Number of rows to return.
+
+    Returns:
+        tuple[SuffixRow, ...]: One row per suffix, largest total size first.
+    """
     rows = con.execute(
         "SELECT COALESCE(s.value, '(no extension)'), COUNT(*), SUM(f.size)"
         " FROM files f LEFT JOIN suffixes s ON s.id = f.suffix_id"
@@ -139,6 +157,13 @@ def _largest_dirs(con: sqlite3.Connection, top_n: int) -> tuple[DirRow, ...]:
     """The largest directories, counting only the files directly in each.
 
     Subtree totals are a different question and a separate query.
+
+    Args:
+        con (sqlite3.Connection): Connection to the index database.
+        top_n (int): Number of rows to return.
+
+    Returns:
+        tuple[DirRow, ...]: One row per directory, largest total size first.
     """
     rows = con.execute(
         _DIR_PATHS + "SELECT t.path, COUNT(f.id), COALESCE(SUM(f.size),0)"
@@ -155,6 +180,14 @@ def _ages(con: sqlite3.Connection, now: float) -> tuple[AgeRow, ...]:
     The bands cover every file, including any whose timestamp is in the future
     — clock skew and restored timestamps both produce those, and a band that
     quietly dropped them would not add up to the total.
+
+    Args:
+        con (sqlite3.Connection): Connection to the index database.
+        now (float): Current time in seconds since the epoch; band edges are
+            computed relative to this.
+
+    Returns:
+        tuple[AgeRow, ...]: One row per age band, oldest last.
     """
     out = []
     upper: float | None = None
@@ -182,7 +215,14 @@ def _ages(con: sqlite3.Connection, now: float) -> tuple[AgeRow, ...]:
 
 
 def human_size(n: int | None) -> str:
-    """Bytes as a short human-readable string, or an em dash if unknown."""
+    """Bytes as a short human-readable string, or an em dash if unknown.
+
+    Args:
+        n (int | None): The byte count to format, or None.
+
+    Returns:
+        str: A short human-readable size, e.g. "1.0 GB", or "—" if n is None.
+    """
     if n is None:
         return "—"
     value = float(n)

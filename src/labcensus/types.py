@@ -72,20 +72,26 @@ class FileStat:
     """
 
     path: PurePath
-    size: int
-    blocks: int | None
-    mtime: float
-    btime: float | None
-    atime: float | None
-    owner: Owner | None
-    group: Owner | None
-    mode: int | None
-    ino: int | None
-    dev: int | None
-    nlink: int | None
-    islink: bool
-    link_target: str | None = None
-    name_raw: bytes | None = None
+    size: int  # apparent size in bytes
+    blocks: int | None  # allocated blocks, or None if unknown
+    mtime: float  # modification time in seconds since the epoch
+    btime: float | None  # creation time in seconds since the epoch, or None if unknown
+    atime: (
+        float | None
+    )  # last access time in seconds since the epoch, or None if unknown
+    owner: Owner | None  # the file's owning principal, or None if unknown
+    group: Owner | None  # the file's owning group, or None if unknown
+    mode: int | None  # the file's permission bits, or None if unknown
+    ino: int | None  # the file's inode number, or None if unknown
+    dev: int | None  # the file's device number, or None if unknown
+    nlink: int | None  # the file's link count, or None if unknown
+    islink: bool  # whether the file is a symlink
+    link_target: str | None = (
+        None  # the symlink's unresolved target, or None if not a symlink
+    )
+    name_raw: bytes | None = (
+        None  # the original bytes of the filename, or None if valid UTF-8
+    )
 
     @property
     def name(self) -> str:

@@ -36,6 +36,18 @@ def walk(
 
     Returns ``(dirs, files, errors)``. Unreadable paths are recorded and the
     walk continues rather than stopping.
+
+    Args:
+        root (str | Path): The directory to walk.
+        writer (IndexWriter): The index writer to record the walk.
+        backend (LocalBackend | None): The backend to use for filesystem operations.
+        progress (ProgressReporter | None): A callable to report progress.
+        progress_every (int): How often to call the progress reporter, in number
+                              of directories.
+
+    Returns:
+        tuple[int, int, int]: A tuple containing the number of directories, files,
+                              and errors encountered during the walk.
     """
     backend = backend or LocalBackend()
     root_path = Path(root)

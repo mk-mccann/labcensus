@@ -39,7 +39,18 @@ class ScanAlreadyRecordedError(Exception):
 
 
 def check_target_outside(db_path: Path, root: Path) -> None:
-    """Raise if ``db_path`` resolves to somewhere inside ``root``."""
+    """Raise if ``db_path`` resolves to somewhere inside ``root``.
+
+    Args:
+        db_path (Path): Where the index would be written.
+        root (Path): The directory about to be scanned.
+
+    Returns:
+        None
+
+    Raises:
+        IndexTargetInsideTreeError: If db_path is root itself or lands inside it.
+    """
     db_resolved = db_path.expanduser().resolve()
     root_resolved = root.expanduser().resolve()
     if db_resolved == root_resolved or root_resolved in db_resolved.parents:
@@ -65,6 +76,16 @@ class IndexWriter:
         hostname: str | None = None,
         now: float | None = None,
     ) -> None:
+        """
+        Args:
+            db_path (str | Path): Where to write the index.
+            batch_size (int): Rows buffered before a flush.
+            hostname (str | None): Overrides the detected hostname; lets tests pin it.
+            now (float | None): Overrides the detected clock; lets tests pin it.
+
+        Returns:
+            None
+        """
         self.db_path = Path(db_path)
         self._batch_size = batch_size
         # Injectable so tests can pin the non-deterministic fields.
@@ -112,11 +133,18 @@ class IndexWriter:
             raise RuntimeError("IndexWriter must be used as a context manager")
         return self._con
 
-    def begin_scan(self, root: PurePath) -> int:
+    def begin_scan(self, root: PurePath) -> int | None:
         """Open a scan and return its id.
 
-        Raises :class:`ScanAlreadyRecordedError` if this index already holds
-        one; the rollups assume a single scan per file.
+        Args:
+            root (PurePath): The directory being scanned.
+
+        Returns:
+            int: The new scan's row id.
+
+        Raises:
+            ScanAlreadyRecordedError: If this index already holds one; the
+                rollups assume a single scan per file.
         """
         if self.connection.execute("SELECT 1 FROM scans LIMIT 1").fetchone():
             raise ScanAlreadyRecordedError(
@@ -137,7 +165,11 @@ class IndexWriter:
         return self._scan_id
 
     def finish(self) -> None:
-        """Flush, record counts, build indexes, and mark the scan finished."""
+        """Flush, record counts, build indexes, and mark the scan finished.
+
+        Returns:
+            None
+        """
         self.flush()
         con = self.connection
         con.execute(
@@ -158,15 +190,32 @@ class IndexWriter:
     # -- writing -----------------------------------------------------------
 
     def add_dir(self, parent_id: int | None, name: str, depth: int) -> int:
-        """Record a directory and return the id its files reference."""
+        """Record a directory and return the id its files reference.
+
+        Args:
+            parent_id (int | None): The parent directory's row id, or None for the scan root.
+            name (str): The directory's own name.
+            depth (int): How many levels below the scan root this directory sits.
+
+        Returns:
+            int: The new directory's row id.
+        """
         cur = self.connection.execute(
             "INSERT INTO dirs(scan_id, parent_id, name, depth) VALUES(?,?,?,?)",
             (self._scan_id, parent_id, name, depth),
         )
         self._n_dirs += 1
-        return cur.lastrowid
+        return cur.lastrowid #type: ignore
 
     def add_files(self, dir_id: int, files: Iterable[FileStat]) -> None:
+        """
+        Args:
+            dir_id (int): The containing directory's row id.
+            files (Iterable[FileStat]): The files to record.
+
+        Returns:
+            None
+        """
         for stat in files:
             self._files.append(
                 (
@@ -194,6 +243,13 @@ class IndexWriter:
             self.flush()
 
     def add_errors(self, errors: Iterable[WalkError]) -> None:
+        """
+        Args:
+            errors (Iterable[WalkError]): The unreadable paths to record.
+
+        Returns:
+            None
+        """
         for error in errors:
             self._errors.append((self._scan_id, str(error.path), error.reason))
             self._n_errors += 1
@@ -201,6 +257,11 @@ class IndexWriter:
             self.flush()
 
     def flush(self) -> None:
+        """Write buffered rows to the database and clear the buffers.
+
+        Returns:
+            None
+        """
         con = self.connection
         if self._files:
             con.executemany(
@@ -222,6 +283,14 @@ class IndexWriter:
     # -- interning ---------------------------------------------------------
 
     def _owner_id(self, owner: Owner | None) -> int | None:
+        """Intern owner and return its row id, inserting if new.
+
+        Args:
+            owner (Owner | None): The principal to intern, or None.
+
+        Returns:
+            int | None: The owner's row id, or None if owner was None.
+        """
         if owner is None:
             return None
         known = self._owners.get(owner)
@@ -242,6 +311,14 @@ class IndexWriter:
         return owner_id
 
     def _suffix_id(self, suffix: str) -> int | None:
+        """Intern suffix and return its row id, inserting if new.
+
+        Args:
+            suffix (str): The file extension to intern, including the dot.
+
+        Returns:
+            int | None: The suffix's row id, or None if suffix was empty.
+        """
         if not suffix:
             return None
         known = self._suffixes.get(suffix)

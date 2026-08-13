@@ -18,7 +18,7 @@ from .index.summary import Summary, human_size, summarise
 from .index.writer import IndexTargetInsideTreeError, check_target_outside
 from .walker import walk
 
-DEFAULT_INDEX_NAME = "labcensus-index.db"
+DEFAULT_INDEX_NAME = f"labcensus-index-{time.strftime('%Y%m%d-%H%M%S')}.db"
 
 app = typer.Typer(
     help="labcensus — read-only census of a lab's storage.",
@@ -56,6 +56,19 @@ def scan(
     Walk PATH and record what is on it.
 
     Reads only. Nothing is written inside PATH, and nothing leaves this machine.
+
+    Args:
+        path (str): Directory to scan.
+        output (Path): Where to write the index (default: ./labcensus-index-YYYYMMDD-HHMMSS.db).
+        top (int): Rows in each summary table.
+        progress (bool): Progress to stderr. On by default when stderr is a terminal.
+
+    Returns:
+        None
+
+    Raises:
+        typer.Exit: If the path is not a directory, if the index would be written inside
+        the tree being scanned, or if the index already exists.
     """
 
     root = Path(path)
@@ -63,6 +76,7 @@ def scan(
         typer.secho(f"not a directory: {root}", fg="red", err=True)
         raise typer.Exit(2)
 
+    # Database for saving the scan. If the user didn't specify a path, use the current working
     db_path = Path(output) if output else Path.cwd() / DEFAULT_INDEX_NAME
     try:
         check_target_outside(db_path, root)
@@ -70,6 +84,7 @@ def scan(
         typer.secho(str(exc), fg="red", err=True)
         raise typer.Exit(2) from exc
 
+    # If the index already exists, don't overwrite it. The user can remove it or choose another path.
     if db_path.exists():
         typer.secho(
             f"index already exists: {db_path}\n"
@@ -97,6 +112,20 @@ def scan(
 
 
 def _progress(*, dirs: int, files: int, errors: int, path: str) -> None:
+    """
+    Logs the last 48 characters of the path, so the user sees where the scan
+    is up to without being overwhelmed by long paths.
+
+    Args:
+        dirs (int): Number of directories scanned so far.
+        files (int): Number of files scanned so far.
+        errors (int): Number of unreadable files encountered so far.
+        path (str): The current path being scanned.
+
+    Returns:
+        None
+    """
+
     tail = path if len(path) <= 48 else "…" + path[-47:]
     print(
         f"\r  {dirs:,} dirs  {files:,} files  {errors:,} unreadable   {tail}",
@@ -107,6 +136,18 @@ def _progress(*, dirs: int, files: int, errors: int, path: str) -> None:
 
 
 def _render(summary: Summary, *, elapsed: float, db_path: Path) -> None:
+    """
+    Render the summary to stdout.
+
+    Args:
+        summary (Summary): The summary of the scan.
+        elapsed (float): Time taken to perform the scan.
+        db_path (Path): Path to the database where the index was written.
+
+    Returns:
+        None
+    """
+
     echo = typer.echo
 
     echo(f"\n{summary.root}")
