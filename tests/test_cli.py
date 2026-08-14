@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 from typer.testing import CliRunner
 
+from labcensus import cli as cli_module
 from labcensus.cli import app
+from labcensus.index import IndexWriter
 
 runner = CliRunner()
 
@@ -25,6 +27,10 @@ def scan(tree, tmp_path, *extra):
         app,
         ["scan", str(tree), "-o", str(tmp_path / "out.db"), "--no-progress", *extra],
     )
+
+
+def classify(db_path, *extra):
+    return runner.invoke(app, ["classify", str(db_path), *extra])
 
 
 class TestScanCommand:
@@ -112,3 +118,91 @@ class TestFailureModes:
         )
         assert result.exit_code == 0
         assert "0 files in 1 directories" in result.stdout
+
+
+class TestClassifyCommand:
+    def test_classify_is_a_subcommand(self):
+        result = runner.invoke(app, ["classify", "--help"])
+        assert result.exit_code == 0
+        assert "Detect known data formats" in result.stdout
+
+    def test_reports_a_detected_format(self, tree, tmp_path):
+        scan(tree, tmp_path)
+        result = classify(tmp_path / "out.db")
+        assert result.exit_code == 0
+        assert "open-ephys" in result.stdout
+
+    def test_reports_the_unrecognised_total(self, tree, tmp_path):
+        scan(tree, tmp_path)
+        result = classify(tmp_path / "out.db")
+        assert "Unrecognised:" in result.stdout
+
+    def test_top_bounds_the_sample_rows(self, tree, tmp_path):
+        scan(tree, tmp_path)
+        result = classify(tmp_path / "out.db", "--top", "1")
+        assert result.exit_code == 0
+
+
+class TestClassifyReadOnly:
+    def test_the_index_file_is_not_modified(self, tree, tmp_path):
+        scan(tree, tmp_path)
+        db_path = tmp_path / "out.db"
+        before = (db_path.stat().st_mtime_ns, db_path.stat().st_size)
+        classify(db_path)
+        after = (db_path.stat().st_mtime_ns, db_path.stat().st_size)
+        assert before == after, "classify modified the index it was reading"
+
+
+class TestClassifyFailureModes:
+    def test_missing_index_exits_cleanly_and_creates_nothing(self, tmp_path):
+        target = tmp_path / "nope.db"
+        result = classify(target)
+        assert result.exit_code == 2
+        assert "not a file" in result.output
+        assert not target.exists()
+
+    def test_a_directory_is_not_a_file(self, tmp_path):
+        result = classify(tmp_path)
+        assert result.exit_code == 2
+        assert "not a file" in result.output
+
+    def test_a_non_sqlite_file_is_rejected_cleanly(self, tmp_path):
+        target = tmp_path / "not_an_index.db"
+        target.write_text("this is not a sqlite file")
+        result = classify(target)
+        assert result.exit_code == 2
+        assert "not a valid index" in result.output
+
+    def test_an_unfinished_scan_is_rejected_cleanly(self, tmp_path):
+        db_path = tmp_path / "unfinished.db"
+        with IndexWriter(db_path, hostname="h", now=1_700_000_000.0):
+            pass
+        result = classify(db_path)
+        assert result.exit_code == 2
+        assert "interrupted" in result.output
+
+
+class TestPluginDefault:
+    def test_plugins_are_off_by_default(self, tree, tmp_path, monkeypatch):
+        seen = []
+
+        def spy(*, include_plugins):
+            seen.append(include_plugins)
+            return ()
+
+        monkeypatch.setattr(cli_module, "load_detectors", spy)
+        scan(tree, tmp_path)
+        classify(tmp_path / "out.db")
+        assert seen == [False]
+
+    def test_plugins_flag_enables_plugin_loading(self, tree, tmp_path, monkeypatch):
+        seen = []
+
+        def spy(*, include_plugins):
+            seen.append(include_plugins)
+            return ()
+
+        monkeypatch.setattr(cli_module, "load_detectors", spy)
+        scan(tree, tmp_path)
+        classify(tmp_path / "out.db", "--plugins")
+        assert seen == [True]

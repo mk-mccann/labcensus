@@ -13,8 +13,10 @@ from pathlib import Path
 
 import typer
 
+from .classify import Rollup, classify_index
+from .detectors import load_detectors
 from .index import IndexWriter
-from .index.summary import Summary, human_size, summarise
+from .index.summary import IncompleteIndexError, Summary, human_size, summarise
 from .index.writer import IndexTargetInsideTreeError, check_target_outside
 from .walker import walk
 
@@ -111,6 +113,57 @@ def scan(
         con.close()
 
 
+@app.command()
+def classify(
+    index: str = typer.Argument(..., help="Index to classify (written by `scan -o`)."),
+    top: int = typer.Option(10, "--top", help="Rows in each summary table."),
+    plugins: bool = typer.Option(
+        False,
+        "--plugins/--no-plugins",
+        help="Also load third-party detectors registered under labcensus.detectors. "
+        "Off by default: this executes arbitrary installed code.",
+    ),
+) -> None:
+    """
+    Detect known data formats across every directory in INDEX, and roll up what was found.
+
+    Reads only the index. The storage that produced it is not touched again.
+
+    Args:
+        index (str): Index to classify (written by `scan -o`).
+        top (int): Rows in each summary table.
+        plugins (bool): Also load third-party detectors registered under labcensus.detectors.
+
+    Returns:
+        None
+
+    Raises:
+        typer.Exit: If the index file does not exist, is not a readable index,
+            or holds no finished scan.
+    """
+
+    db_path = Path(index)
+    if not db_path.is_file():
+        typer.secho(f"not a file: {db_path}", fg="red", err=True)
+        raise typer.Exit(2)
+
+    detectors = load_detectors(include_plugins=plugins)
+
+    con = sqlite3.connect(db_path)
+    try:
+        rollup = classify_index(con, detectors=detectors, top_n=top)
+    except sqlite3.DatabaseError as exc:
+        typer.secho(f"not a valid index: {db_path} ({exc})", fg="red", err=True)
+        raise typer.Exit(2) from exc
+    except IncompleteIndexError as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2) from exc
+    finally:
+        con.close()
+
+    _render_classify(rollup, index_path=db_path, n_detectors=len(detectors))
+
+
 def _progress(*, dirs: int, files: int, errors: int, path: str) -> None:
     """
     Logs the last 48 characters of the path, so the user sees where the scan
@@ -198,6 +251,75 @@ def _render(summary: Summary, *, elapsed: float, db_path: Path) -> None:
 
     echo(f"\nIndex written to {db_path}")
     echo("Nothing was written inside the scanned tree, and nothing left this machine.")
+
+
+def _render_classify(rollup: Rollup, *, index_path: Path, n_detectors: int) -> None:
+    """
+    Render the classification rollup to stdout.
+
+    Args:
+        rollup (Rollup): The classification rollup.
+        index_path (Path): Path to the index that was classified.
+        n_detectors (int): How many detectors were run.
+
+    Returns:
+        None
+    """
+
+    echo = typer.echo
+
+    echo(f"\n{rollup.root}")
+    echo(f"  classified from {index_path}")
+    echo(
+        f"  {rollup.n_dirs:,} directories, "
+        f"{rollup.n_dirs_with_hits:,} matched a known format, "
+        f"{rollup.n_dirs_without_hits:,} did not"
+    )
+    echo(
+        f"  {human_size(rollup.size_with_hits)} matched, "
+        f"{human_size(rollup.size_without_hits)} unrecognised, "
+        f"{human_size(rollup.total_size)} total"
+    )
+
+    if rollup.detectors:
+        echo(f"\nBy detector ({n_detectors} loaded)")
+        for row in rollup.detectors:
+            echo(
+                f"  {row.detector:<16} {row.modality:<40} "
+                f"{row.n_dirs:>6,} dirs  {human_size(row.total_size):>12}"
+            )
+            bits = [
+                f"{label} {n}"
+                for label, n in (
+                    ("HIGH", row.confidence.high),
+                    ("MEDIUM", row.confidence.medium),
+                    ("LOW", row.confidence.low),
+                )
+                if n
+            ]
+            if bits:
+                echo("      " + "   ".join(bits))
+            for sample in row.samples:
+                echo(f"      {sample.path}")
+            if row.n_dirs > len(row.samples):
+                echo(f"      … and {row.n_dirs - len(row.samples):,} more")
+    else:
+        echo("\nNo directory matched a known format.")
+
+    echo(
+        f"\nUnrecognised: {rollup.n_dirs_without_hits:,} directories, "
+        f"{human_size(rollup.size_without_hits)}"
+    )
+    if rollup.sample_unrecognised:
+        for row in rollup.sample_unrecognised:
+            echo(f"  {human_size(row.size):>12}  {row.path}")
+        if rollup.n_dirs_without_hits > len(rollup.sample_unrecognised):
+            more = rollup.n_dirs_without_hits - len(rollup.sample_unrecognised)
+            echo(f"  … and {more:,} more")
+
+    echo(
+        "\nRead-only: nothing was written to the index, and nothing left this machine."
+    )
 
 
 if __name__ == "__main__":

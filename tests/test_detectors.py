@@ -19,6 +19,7 @@ from labcensus.detectors.caimg_caiman import CaimanDetector
 from labcensus.detectors.caimg_suite2p import Suite2pDetector, Suite2pLegacyDetector
 from labcensus.detectors.ephys_openephys import OpenEphysDetector
 from labcensus.detectors.ephys_spikeglx import SpikeGLXDetector
+from labcensus.detectors.standard_nwb import NWBDetector
 from labcensus.types import DirListing, FileStat, posix_owner
 
 SUITE2P_REQUIRED = ("F.npy", "Fneu.npy", "spks.npy", "stat.npy", "iscell.npy")
@@ -365,6 +366,43 @@ class TestDeepLabCut:
         )
 
 
+class TestNWB:
+    def test_fires_on_nwb_file(self):
+        hit = NWBDetector().sniff_dir(
+            listing("/nas/proj/sub-01", ["sub-01_ses-01.nwb"])
+        )
+        assert hit is not None
+        assert hit.confidence is Confidence.HIGH
+        assert "sub-01_ses-01.nwb" in hit.evidence
+
+    def test_multiple_nwb_files_note_the_count(self):
+        hit = NWBDetector().sniff_dir(
+            listing(
+                "/nas/proj/dandiset",
+                ["sub-01_ses-01.nwb", "sub-02_ses-01.nwb", "sub-03_ses-01.nwb"],
+            )
+        )
+        assert hit is not None
+        assert hit.evidence == ("sub-01_ses-01.nwb", "(+2 more *.nwb)")
+
+    def test_case_insensitive_extension(self):
+        hit = NWBDetector().sniff_dir(listing("/nas/proj", ["SESSION.NWB"]))
+        assert hit is not None
+
+    def test_bare_hdf5_is_not_nwb(self):
+        # .nwb is reserved for the standard; a generic .hdf5/.h5 file is not
+        # evidence of it — the same collision CaImAn's detector avoids.
+        assert (
+            NWBDetector().sniff_dir(
+                listing("/nas/proj", ["analysis_results.hdf5", "data.h5"])
+            )
+            is None
+        )
+
+    def test_empty_directory_is_not_a_hit(self):
+        assert NWBDetector().sniff_dir(listing("/nas/empty")) is None
+
+
 class TestRegistryAndRanking:
     def test_builtins_load_without_plugins(self):
         detectors = load_detectors(include_plugins=False)
@@ -375,6 +413,7 @@ class TestRegistryAndRanking:
             "suite2p-legacy",
             "caiman",
             "deeplabcut",
+            "nwb",
         }
 
     def test_unrecognised_directory_yields_no_hits(self):

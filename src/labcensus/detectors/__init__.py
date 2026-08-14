@@ -66,6 +66,7 @@ def builtin_detectors() -> tuple[Detector, ...]:
     from .caimg_suite2p import Suite2pDetector, Suite2pLegacyDetector
     from .ephys_openephys import OpenEphysDetector
     from .ephys_spikeglx import SpikeGLXDetector
+    from .standard_nwb import NWBDetector
 
     return (
         OpenEphysDetector(),
@@ -74,6 +75,7 @@ def builtin_detectors() -> tuple[Detector, ...]:
         Suite2pLegacyDetector(),
         CaimanDetector(),
         DeepLabCutDetector(),
+        NWBDetector(),
     )
 
 

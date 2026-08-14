@@ -58,21 +58,12 @@ def iter_dir_listings(con: sqlite3.Connection) -> Iterator[DirListing]:
     Raises:
         IncompleteIndexError: If the index holds no finished scan.
     """
-    root, platform_name = _finished_scan(con)
-    path_cls: type[PurePath] = (
-        PureWindowsPath if platform_name == "Windows" else PurePosixPath
-    )
+    rows, paths = _dir_paths(con)
 
-    rows = con.execute(_DIRS).fetchall()
-
-    paths: dict[int, PurePath] = {}
     subdirs: dict[int, set[str]] = defaultdict(set)
-    for dir_id, parent_id, name in rows:
-        if parent_id is None:
-            paths[dir_id] = path_cls(root)
-        else:
-            paths[dir_id] = paths[parent_id] / name
-            subdirs[parent_id].add(name)
+    for dir_id, parent_id, _name in rows:
+        if parent_id is not None:
+            subdirs[parent_id].add(paths[dir_id].name)
 
     # Both queries are ordered by (a prefix of) dir id, so a directory's files
     # are always the next group here by the time its own row comes around in
@@ -90,6 +81,81 @@ def iter_dir_listings(con: sqlite3.Connection) -> Iterator[DirListing]:
             files=files,
             subdirs=subdirs.get(dir_id, set()),
         )
+
+
+def _dir_paths(con: sqlite3.Connection) -> tuple[list[tuple], dict[int, PurePath]]:
+    """Every directory row, and each row's id mapped to its reconstructed path.
+
+    Args:
+        con (sqlite3.Connection): An open connection to a finished index.
+
+    Returns:
+        tuple[list[tuple], dict[int, PurePath]]: The raw ``(id, parent_id, name)``
+            rows in scan order, and each id mapped to its reconstructed path.
+
+    Raises:
+        IncompleteIndexError: If the index holds no finished scan.
+    """
+    root, platform_name = _finished_scan(con)
+    path_cls: type[PurePath] = (
+        PureWindowsPath if platform_name == "Windows" else PurePosixPath
+    )
+
+    rows = con.execute(_DIRS).fetchall()
+
+    paths: dict[int, PurePath] = {}
+    for dir_id, parent_id, name in rows:
+        paths[dir_id] = path_cls(root) if parent_id is None else paths[parent_id] / name
+
+    return rows, paths
+
+
+def dir_ids_by_path(con: sqlite3.Connection) -> dict[PurePath, int]:
+    """Every directory's reconstructed path mapped to its row id.
+
+    A companion to :func:`iter_dir_listings` for callers that need to look a
+    directory back up by path afterwards — classification uses this to find
+    the id behind a hit's listing, so it can query that directory's subtree.
+
+    Args:
+        con (sqlite3.Connection): An open connection to a finished index.
+
+    Returns:
+        dict[PurePath, int]: Every directory's path mapped to its row id.
+
+    Raises:
+        IncompleteIndexError: If the index holds no finished scan.
+    """
+    _rows, paths = _dir_paths(con)
+    return {path: dir_id for dir_id, path in paths.items()}
+
+
+def subtree_size(con: sqlite3.Connection, dir_id: int) -> int:
+    """Total file size at ``dir_id`` and every directory beneath it.
+
+    One recursive query scoped to this directory's own subtree — meant to be
+    called per finding, not per directory in the whole tree, since findings
+    are typically a small fraction of all directories.
+
+    Args:
+        con (sqlite3.Connection): An open connection to a finished index.
+        dir_id (int): The directory's row id.
+
+    Returns:
+        int: Total bytes across dir_id and its descendants.
+    """
+    (total,) = con.execute(
+        """
+        WITH RECURSIVE subtree(id) AS (
+            SELECT ?
+            UNION ALL
+            SELECT d.id FROM dirs d JOIN subtree s ON d.parent_id = s.id
+        )
+        SELECT COALESCE(SUM(f.size), 0) FROM files f WHERE f.dir_id IN (SELECT id FROM subtree)
+        """,
+        (dir_id,),
+    ).fetchone()
+    return total
 
 
 def _build_file(dir_path: PurePath, row: tuple) -> FileStat:

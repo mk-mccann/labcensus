@@ -11,8 +11,8 @@ import pytest
 
 from labcensus.backends import LocalBackend
 from labcensus.index import IndexWriter
-from labcensus.index.reader import iter_dir_listings
-from labcensus.index.summary import IncompleteIndexError
+from labcensus.index.reader import dir_ids_by_path, iter_dir_listings, subtree_size
+from labcensus.index.summary import IncompleteIndexError, summarise
 from labcensus.types import posix_group, posix_owner
 from labcensus.walker import walk
 
@@ -50,6 +50,16 @@ def by_path(listings, path):
     """
     want = str(path)
     return next(listing for listing in listings if str(listing.path) == want)
+
+
+def dir_id_for(dir_ids, path):
+    """The id for the one directory whose path stringifies to `path`.
+
+    Compared as strings for the same reason `by_path` is: a live root like
+    `tmp_path` is a concrete `Path`, callers pass whichever is handy.
+    """
+    want = str(path)
+    return next(dir_id for p, dir_id in dir_ids.items() if str(p) == want)
 
 
 class TestDetectorParity:
@@ -242,3 +252,46 @@ class TestStreamingOrder:
             ("d", 1),
             ("e", 0),
         ]
+
+
+class TestDirIdsByPath:
+    def test_every_listing_path_has_a_matching_id(self, tmp_path, tree):
+        con = index_of(tmp_path, tree)
+        dir_ids = dir_ids_by_path(con)
+        listings = list(iter_dir_listings(con))
+
+        assert len(dir_ids) == len(listings)
+        for listing in listings:
+            assert isinstance(dir_id_for(dir_ids, listing.path), int)
+
+        (empty_id,) = con.execute("SELECT id FROM dirs WHERE name = 'empty'").fetchone()
+        assert dir_id_for(dir_ids, tree / "empty") == empty_id
+
+
+class TestSubtreeSize:
+    def test_includes_files_in_nested_subdirectories(self, tmp_path, tree):
+        """`rec1` holds `structure.oebin` (2 bytes) directly, and
+        `continuous.dat` (2048 bytes) two levels down — the same shape a real
+        Open-Ephys binary recording has. Subtree size must include both."""
+        con = index_of(tmp_path, tree)
+        dir_ids = dir_ids_by_path(con)
+        rec1_id = dir_id_for(dir_ids, tree / "rec1")
+
+        assert subtree_size(con, rec1_id) == 2 + 2048
+
+        immediate_only = sum(
+            f.size for f in by_path(iter_dir_listings(con), tree / "rec1").files
+        )
+        assert immediate_only != subtree_size(con, rec1_id)
+
+    def test_a_leaf_directory_equals_its_own_immediate_size(self, tmp_path, tree):
+        con = index_of(tmp_path, tree)
+        dir_ids = dir_ids_by_path(con)
+        plane0_id = dir_id_for(dir_ids, tree / "suite2p" / "plane0")
+        assert subtree_size(con, plane0_id) == 5 * 16
+
+    def test_the_root_equals_the_whole_tree(self, tmp_path, tree):
+        con = index_of(tmp_path, tree)
+        dir_ids = dir_ids_by_path(con)
+        root_id = dir_id_for(dir_ids, tree)
+        assert subtree_size(con, root_id) == summarise(con).total_size
